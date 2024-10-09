@@ -214,9 +214,9 @@ public class BrokerStartup {
                 nettyServerConfig,
                 nettyClientConfig,
                 messageStoreConfig);
+            properties.setProperty("autoCreateTopicEnable", "true");
             // remember all configs to prevent discard
             controller.getConfiguration().registerConfig(properties);
-
             boolean initResult = controller.initialize();
             if (!initResult) {
                 controller.shutdown();

@@ -46,14 +46,48 @@ import org.apache.rocketmq.common.protocol.route.TopicRouteData;
 import org.apache.rocketmq.common.sysflag.TopicSysFlag;
 import org.apache.rocketmq.remoting.common.RemotingUtil;
 
+/**
+ * 路由管理器 RouteInfoManager 是 NameServer 中的元数据管理组件，负责 Broker 集群信息以及 Topic 路由信息的维护和管理
+ *
+ * 一个 Broker 组包含一个 Master + 多个 Slave，多个 Broker 组组成一个Broker集群，可以部署多套 Broker 集群。
+ */
 public class RouteInfoManager {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.NAMESRV_LOGGER_NAME);
     private final static long BROKER_CHANNEL_EXPIRED_TIME = 1000 * 60 * 2;
+    // 针对 Broker、Topic 增删改查的读写锁
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
+
+    /**
+     * Topic 的数据结构，Topic 属于逻辑概念，每个 Topic 会分散到多个 Broker 组上
+     * key 是 topic 名称，value 是一个 List<QueueData>，其 key 是 broker 组名，QueueData 则是存放 topic 的消息队列信息
+     */
     private final HashMap<String/* topic */, List<QueueData>> topicQueueTable;
+
+    /**
+     * Broker 的数据结构，一个 brokerName 包含一组 broker 的数据
+     * key 是 Broker 组名称，就是配置文件中的 brokerName=RaftNode00，一个组可以由一个 Master + 多个 Slave 组成高可用，一个 Broker 集群可以有多个 Broker 组。
+     * value 是 BrokerData，包含集群名称、组名、这一组中的 Broker 地址。
+     */
     private final HashMap<String/* brokerName */, BrokerData> brokerAddrTable;
+
+    /**
+     * Broker 集群包含的 Broker 组，可能会有多个集群多个组，一般来说部署一个集群即可
+     * key 是集群名称，就是配置文件中的 brokerClusterName=RaftCluster
+     * value 是 Set 结构，存储了这个集群下的所有 Broker 组名称
+     */
     private final HashMap<String/* clusterName */, Set<String/* brokerName */>> clusterAddrTable;
+
+    /**
+     * 管理与 Broker 之间的长连接，心跳检测、连接保活
+     * key 是每一个 Broker 的地址。
+     * value 是 BrokerLiveInfo 类型，主要与 Broker 连接保活相关。
+     */
     private final HashMap<String/* brokerAddr */, BrokerLiveInfo> brokerLiveTable;
+
+    /**
+     * filterServerTable 存放 Broker 绑定的消息筛选器，Broker 可以绑定一个 FilterServer 用于消息筛选
+     *  key 是 broker 的地址，value 是 FilterServer 类名的列表。
+     */
     private final HashMap<String/* brokerAddr */, List<String>/* Filter Server */> filterServerTable;
 
     public RouteInfoManager() {
@@ -100,6 +134,18 @@ public class RouteInfoManager {
         return topicList.encode();
     }
 
+    /**
+     * broker注册
+     * @param clusterName broker 集群名称
+     * @param brokerAddr broker 机器地址
+     * @param brokerName broker 组名称
+     * @param brokerId 当前 broker 唯一ID
+     * @param haServerAddr HA 地址
+     * @param topicConfigWrapper
+     * @param filterServerList
+     * @param channel 网络长连接通道
+     * @return
+     */
     public RegisterBrokerResult registerBroker(
         final String clusterName,
         final String brokerAddr,
@@ -114,6 +160,7 @@ public class RouteInfoManager {
             try {
                 this.lock.writeLock().lockInterruptibly();
 
+                //1、向集群关系表 clusterAddrTable 添加 Broker 组名
                 Set<String> brokerNames = this.clusterAddrTable.get(clusterName);
                 if (null == brokerNames) {
                     brokerNames = new HashSet<String>();
@@ -123,6 +170,7 @@ public class RouteInfoManager {
 
                 boolean registerFirst = false;
 
+                //2、从Broker表 brokerAddrTable 获取或创建Broker组 BrokerData；
                 BrokerData brokerData = this.brokerAddrTable.get(brokerName);
                 if (null == brokerData) {
                     registerFirst = true;
@@ -135,28 +183,33 @@ public class RouteInfoManager {
                 Iterator<Entry<Long, String>> it = brokerAddrsMap.entrySet().iterator();
                 while (it.hasNext()) {
                     Entry<Long, String> item = it.next();
+                    //3、遍历Broker组里的Broker表，如果Broker地址一样，但ID不一样，可能是由于从主切换重新注册，因此需要先移除旧的Broker；
                     if (null != brokerAddr && brokerAddr.equals(item.getValue()) && brokerId != item.getKey()) {
                         it.remove();
                     }
                 }
-
+                //4、把Broker添加到Broker组里；
                 String oldAddr = brokerData.getBrokerAddrs().put(brokerId, brokerAddr);
                 registerFirst = registerFirst || (null == oldAddr);
 
+                //5、 创建或更新 Master Broker 的 Topic 配置
                 if (null != topicConfigWrapper
                     && MixAll.MASTER_ID == brokerId) {
+                    // 版本变更或第一次注册时更新Topic配置
                     if (this.isBrokerTopicConfigChanged(brokerAddr, topicConfigWrapper.getDataVersion())
                         || registerFirst) {
                         ConcurrentMap<String, TopicConfig> tcTable =
                             topicConfigWrapper.getTopicConfigTable();
                         if (tcTable != null) {
                             for (Map.Entry<String, TopicConfig> entry : tcTable.entrySet()) {
+                                // 创建或更新消息队列配置
                                 this.createAndUpdateQueueData(brokerName, entry.getValue());
                             }
                         }
                     }
                 }
 
+                //6、 创建 Broker 保活信息
                 BrokerLiveInfo prevBrokerLiveInfo = this.brokerLiveTable.put(brokerAddr,
                     new BrokerLiveInfo(
                         System.currentTimeMillis(),
@@ -167,6 +220,7 @@ public class RouteInfoManager {
                     log.info("new broker registered, {} HAServer: {}", brokerAddr, haServerAddr);
                 }
 
+                //7、 更新 FilterServer
                 if (filterServerList != null) {
                     if (filterServerList.isEmpty()) {
                         this.filterServerTable.remove(brokerAddr);
@@ -175,11 +229,13 @@ public class RouteInfoManager {
                     }
                 }
 
+                //8、 Slave Broker，一组 Broker 中的 Slave Broker
                 if (MixAll.MASTER_ID != brokerId) {
                     String masterAddr = brokerData.getBrokerAddrs().get(MixAll.MASTER_ID);
                     if (masterAddr != null) {
                         BrokerLiveInfo brokerLiveInfo = this.brokerLiveTable.get(masterAddr);
                         if (brokerLiveInfo != null) {
+                            // 返回 Master Broker 的地址和 HA地址
                             result.setHaServerAddr(brokerLiveInfo.getHaServerAddr());
                             result.setMasterAddr(masterAddr);
                         }
@@ -766,9 +822,13 @@ public class RouteInfoManager {
 }
 
 class BrokerLiveInfo {
+    // Broker 最近一次的心跳时间
     private long lastUpdateTimestamp;
+    // Broker 数据版本号
     private DataVersion dataVersion;
+    // 与 Broker 间的网络长连接
     private Channel channel;
+    // HA高可用节点地址
     private String haServerAddr;
 
     public BrokerLiveInfo(long lastUpdateTimestamp, DataVersion dataVersion, Channel channel,

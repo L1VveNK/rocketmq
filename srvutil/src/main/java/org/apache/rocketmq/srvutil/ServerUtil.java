@@ -24,6 +24,11 @@ import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 
+/**
+ * 使用 Apache commons-cli 包来解析命令行参数
+ * 它能解析 GNU(--k=v) 、POSIX（-k v） 风格的参数。
+ *
+ */
 public class ServerUtil {
 
     public static Options buildCommandlineOptions(final Options options) {

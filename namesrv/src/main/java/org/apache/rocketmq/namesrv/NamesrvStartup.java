@@ -54,7 +54,9 @@ public class NamesrvStartup {
     public static NamesrvController main0(String[] args) {
 
         try {
+            // 创建 NameServer 控制器
             NamesrvController controller = createNamesrvController(args);
+            // 启动 NameServer
             start(controller);
             String tip = "The Name Server boot success. serializeType=" + RemotingCommand.getSerializeTypeConfigInThisServer();
             log.info(tip);
@@ -68,20 +70,39 @@ public class NamesrvStartup {
         return null;
     }
 
+    /**
+     * 参数优先级：
+     * 默认（最低）
+     *  默认的配置参考NamesrvConfig和NettyServerConfig
+     *
+     * 命令行指定的配置文件（其次）
+     *
+     *
+     * 命令行指定的参数（最高）
+     * @param args
+     * @return
+     * @throws IOException
+     * @throws JoranException
+     */
     public static NamesrvController createNamesrvController(String[] args) throws IOException, JoranException {
         System.setProperty(RemotingCommand.REMOTING_VERSION_KEY, Integer.toString(MQVersion.CURRENT_VERSION));
         //PackageConflictDetect.detectFastjson();
 
+        // 设置 NameServer 的命令行参数。Options 用来定义和设置参数，它是所有参数的容器
         Options options = ServerUtil.buildCommandlineOptions(new Options());
+        // 命令行参数
         commandLine = ServerUtil.parseCmdLine("mqnamesrv", args, buildCommandlineOptions(options), new PosixParser());
         if (null == commandLine) {
             System.exit(-1);
             return null;
         }
 
+        // NameServer 配置
         final NamesrvConfig namesrvConfig = new NamesrvConfig();
+        // NettyServer 配置
         final NettyServerConfig nettyServerConfig = new NettyServerConfig();
         nettyServerConfig.setListenPort(9876);
+        // 读取命令行中指定的配置文件（properties文件）
         if (commandLine.hasOption('c')) {
             String file = commandLine.getOptionValue('c');
             if (file != null) {
@@ -98,6 +119,7 @@ public class NamesrvStartup {
             }
         }
 
+        // 打印所有配置以及值
         if (commandLine.hasOption('p')) {
             InternalLogger console = InternalLoggerFactory.getLogger(LoggerName.NAMESRV_CONSOLE_NAME);
             MixAll.printObjectProperties(console, namesrvConfig);
@@ -105,13 +127,16 @@ public class NamesrvStartup {
             System.exit(0);
         }
 
+        //命令行的参数写入到配置中
         MixAll.properties2Object(ServerUtil.commandLine2Properties(commandLine), namesrvConfig);
 
+        //必须有ROCKETMQ_HOME配置，在启动类中进行了设置
         if (null == namesrvConfig.getRocketmqHome()) {
             System.out.printf("Please set the %s variable in your environment to match the location of the RocketMQ installation%n", MixAll.ROCKETMQ_HOME_ENV);
             System.exit(-2);
         }
 
+        //nameServer 对应的logback配置，读取的是ROCKETMQ_HOME/conf/logback_namesrv.xml
         LoggerContext lc = (LoggerContext) LoggerFactory.getILoggerFactory();
         JoranConfigurator configurator = new JoranConfigurator();
         configurator.setContext(lc);
@@ -120,9 +145,11 @@ public class NamesrvStartup {
 
         log = InternalLoggerFactory.getLogger(LoggerName.NAMESRV_LOGGER_NAME);
 
+        //打印配置
         MixAll.printObjectProperties(log, namesrvConfig);
         MixAll.printObjectProperties(log, nettyServerConfig);
 
+        //创建nameServer控制器
         final NamesrvController controller = new NamesrvController(namesrvConfig, nettyServerConfig);
 
         // remember all configs to prevent discard
@@ -136,13 +163,15 @@ public class NamesrvStartup {
         if (null == controller) {
             throw new IllegalArgumentException("NamesrvController is null");
         }
-
+        // 控制器初始化
         boolean initResult = controller.initialize();
         if (!initResult) {
             controller.shutdown();
             System.exit(-3);
         }
 
+        //注册一个JVM钩子函数，在JVM进程关闭时停止 NamesrvController，释放线程池等资源
+        //可以看到一种释放程序资源的比较优雅的思路，就是向JVM注册一个钩子函数，在JVM进程关闭时回调这个钩子函数，然后就可以去释放进程中的资源，如线程池。
         Runtime.getRuntime().addShutdownHook(new ShutdownHookThread(log, new Callable<Void>() {
             @Override
             public Void call() throws Exception {
@@ -150,7 +179,7 @@ public class NamesrvStartup {
                 return null;
             }
         }));
-
+        // 启动 NameServer
         controller.start();
 
         return controller;

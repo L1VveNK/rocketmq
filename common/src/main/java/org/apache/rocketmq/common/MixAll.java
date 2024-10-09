@@ -138,20 +138,32 @@ public class MixAll {
         return 0;
     }
 
+    /**
+     * 1、先将数据写入一个 .tmp 临时文件
+     * 2、然后读取原文件的内容，写入一个 .bak 备份文件
+     * 3、最后删除原文件，将 .tmp 文件名称改为原名称
+     * 更新一些比较重要的配置文件时，可以先做一个备份，再写入新的数据。
+     * @param str
+     * @param fileName
+     * @throws IOException
+     */
     public static void string2File(final String str, final String fileName) throws IOException {
-
+        // 先将写的配置写入 kvConfig.json.tmp 临时文件
         String tmpFile = fileName + ".tmp";
         string2FileNotSafe(str, tmpFile);
 
+        // 读取原始内容，并写入一个 kvConfig.json.bak 备份文件
         String bakFile = fileName + ".bak";
         String prevContent = file2String(fileName);
         if (prevContent != null) {
             string2FileNotSafe(prevContent, bakFile);
         }
 
+        // 删除原配置文件
         File file = new File(fileName);
         file.delete();
 
+        // 将临时文件重命名为配置文件：kvConfig.json.tmp => kvConfig.json
         file = new File(tmpFile);
         file.renameTo(new File(fileName));
     }

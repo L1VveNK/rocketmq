@@ -17,6 +17,8 @@
 package org.apache.rocketmq.example.quickstart;
 
 import java.util.List;
+
+import io.netty.channel.DefaultChannelId;
 import org.apache.rocketmq.client.consumer.DefaultMQPushConsumer;
 import org.apache.rocketmq.client.consumer.listener.ConsumeConcurrentlyContext;
 import org.apache.rocketmq.client.consumer.listener.ConsumeConcurrentlyStatus;
@@ -48,6 +50,8 @@ public class Consumer {
          * }
          * </pre>
          */
+        DefaultChannelId.newInstance();
+        consumer.setNamesrvAddr("127.0.0.1:9876");
 
         /*
          * Specify where to start in case the specific consumer group is a brand-new one.

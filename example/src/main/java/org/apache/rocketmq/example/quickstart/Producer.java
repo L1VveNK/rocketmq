@@ -16,6 +16,7 @@
  */
 package org.apache.rocketmq.example.quickstart;
 
+import io.netty.channel.DefaultChannelId;
 import org.apache.rocketmq.client.exception.MQClientException;
 import org.apache.rocketmq.client.producer.DefaultMQProducer;
 import org.apache.rocketmq.client.producer.SendResult;
@@ -44,6 +45,8 @@ public class Producer {
          * }
          * </pre>
          */
+        DefaultChannelId.newInstance();
+        producer.setNamesrvAddr("127.0.0.1:9876");
 
         /*
          * Launch the instance.
