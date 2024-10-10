@@ -220,7 +220,7 @@ public class RouteInfoManager {
                     log.info("new broker registered, {} HAServer: {}", brokerAddr, haServerAddr);
                 }
 
-                //7、 更新 FilterServer
+                //7、 更新 FilterServer表
                 if (filterServerList != null) {
                     if (filterServerList.isEmpty()) {
                         this.filterServerTable.remove(brokerAddr);
@@ -253,6 +253,7 @@ public class RouteInfoManager {
 
     public boolean isBrokerTopicConfigChanged(final String brokerAddr, final DataVersion dataVersion) {
         DataVersion prev = queryBrokerTopicConfig(brokerAddr);
+        //Broker组第一个注册或者版本变更
         return null == prev || !prev.equals(dataVersion);
     }
 
@@ -357,6 +358,13 @@ public class RouteInfoManager {
         return topicCnt;
     }
 
+    /**
+     * broker下线
+     * @param clusterName
+     * @param brokerAddr
+     * @param brokerName
+     * @param brokerId
+     */
     public void unregisterBroker(
         final String clusterName,
         final String brokerAddr,
@@ -365,23 +373,25 @@ public class RouteInfoManager {
         try {
             try {
                 this.lock.writeLock().lockInterruptibly();
+                // 移除保活信息
                 BrokerLiveInfo brokerLiveInfo = this.brokerLiveTable.remove(brokerAddr);
                 log.info("unregisterBroker, remove from brokerLiveTable {}, {}",
                     brokerLiveInfo != null ? "OK" : "Failed",
                     brokerAddr
                 );
-
+                // 移除 FilterServer
                 this.filterServerTable.remove(brokerAddr);
-
+                // 是否移除 Broker组
                 boolean removeBrokerName = false;
                 BrokerData brokerData = this.brokerAddrTable.get(brokerName);
                 if (null != brokerData) {
+                    // 移除 Broker
                     String addr = brokerData.getBrokerAddrs().remove(brokerId);
                     log.info("unregisterBroker, remove addr from brokerAddrTable {}, {}",
                         addr != null ? "OK" : "Failed",
                         brokerAddr
                     );
-
+                    // 没有Broker就移除 Broker 组
                     if (brokerData.getBrokerAddrs().isEmpty()) {
                         this.brokerAddrTable.remove(brokerName);
                         log.info("unregisterBroker, remove name from brokerAddrTable OK, {}",
@@ -395,11 +405,12 @@ public class RouteInfoManager {
                 if (removeBrokerName) {
                     Set<String> nameSet = this.clusterAddrTable.get(clusterName);
                     if (nameSet != null) {
+                        // 移除集群中的Broker组
                         boolean removed = nameSet.remove(brokerName);
                         log.info("unregisterBroker, remove name from clusterAddrTable {}, {}",
                             removed ? "OK" : "Failed",
                             brokerName);
-
+                        // Broker组没有了就移除集群
                         if (nameSet.isEmpty()) {
                             this.clusterAddrTable.remove(clusterName);
                             log.info("unregisterBroker, remove cluster from clusterAddrTable {}",
@@ -407,6 +418,7 @@ public class RouteInfoManager {
                             );
                         }
                     }
+                    // 移除Topic队列
                     this.removeTopicByBrokerName(brokerName);
                 }
             } finally {
@@ -500,15 +512,24 @@ public class RouteInfoManager {
         while (it.hasNext()) {
             Entry<String, BrokerLiveInfo> next = it.next();
             long last = next.getValue().getLastUpdateTimestamp();
+            //判断每个 Broker 的最近一次发送心跳的时间是否超出2分钟
             if ((last + BROKER_CHANNEL_EXPIRED_TIME) < System.currentTimeMillis()) {
+                //关闭连接通道
                 RemotingUtil.closeChannel(next.getValue().getChannel());
+                //移除 BrokerLiveInfo
                 it.remove();
                 log.warn("The broker channel expired, {} {}ms", next.getKey(), BROKER_CHANNEL_EXPIRED_TIME);
+                //触发通道关闭事件 onChannelDestroy
                 this.onChannelDestroy(next.getKey(), next.getValue().getChannel());
             }
         }
     }
 
+    /**
+     * onChannelDestroy 的逻辑就是在移除内存表中与 Broker 相关的数据，其逻辑与 unregisterBroker 类似
+     * @param remoteAddr
+     * @param channel
+     */
     public void onChannelDestroy(String remoteAddr, Channel channel) {
         String brokerAddrFound = null;
         if (channel != null) {
